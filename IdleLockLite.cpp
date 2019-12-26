@@ -44,6 +44,9 @@ ULONGLONG hookCalls = 0;
 HHOOK llkeyboardHandle = 0;
 HHOOK llmouseHandle = 0;
 
+// timer
+UINT_PTR timer;
+
 
 int APIENTRY WinMain(
 	_In_ HINSTANCE hInstance,
@@ -68,24 +71,6 @@ int APIENTRY WinMain(
 	wc.lpszClassName = CLASS_NAME;
 	RegisterClass(&wc);
 
-	//HWND window = CreateWindowEx(
-	//	0,
-	//	CLASS_NAME,
-	//	L"IdleLockLite",
-	//	WS_OVERLAPPEDWINDOW,
-	//	CW_USEDEFAULT,
-	//	CW_USEDEFAULT,
-	//	CW_USEDEFAULT,
-	//	CW_USEDEFAULT,
-	//	NULL,
-	//	NULL,
-	//	instance,
-	//	NULL
-	//);
-
-	//assert(window != 0);
-	//ShowWindow(window, nCmdShow);
-
 	llkeyboardHandle = SetWindowsHookEx(WH_KEYBOARD_LL, (HOOKPROC)GetProcAddress(hInstance, "UpdateLastInteractionKeyboard"), hInstance, 0);
 	llmouseHandle = SetWindowsHookEx(WH_MOUSE_LL, (HOOKPROC)GetProcAddress(hInstance, "UpdateLastInteractionMouse"), hInstance, 0);
 
@@ -95,27 +80,33 @@ int APIENTRY WinMain(
 		OutputDebugString(debugStrBuffer);
 	}
 
+	// set a timer to evaluate if we should spawn the lock dialogue because of inactivity
+	timer = SetTimer(NULL, 0, 10000, EvaluateIdleConditions);
+
+
+	// main message loop
 	MSG msg;
 
 	while (GetMessage(&msg, nullptr, 0, 0))
 	{
 		TranslateMessage(&msg);
 		DispatchMessage(&msg);
-
-		if (swprintf_s(debugStrBuffer, bufLen, L"Calls: %lld\n", hookCalls)) {
-			OutputDebugString(debugStrBuffer);
-		}
-
 	}
 
-	// clean up
+	Cleanup();
 	
+	return 0;
+}
+
+
+void Cleanup()
+{
+	// clean up
+
 	assert(llmouseHandle != NULL);
 	assert(llkeyboardHandle != NULL);
 	UnhookWindowsHookEx(llmouseHandle);
 	UnhookWindowsHookEx(llkeyboardHandle);
-	
-	return 0;
 }
 
 LRESULT CALLBACK WndProc(
@@ -128,8 +119,14 @@ LRESULT CALLBACK WndProc(
 	switch (message)
 	{
 	case WM_DESTROY:
+		Cleanup();
 		PostQuitMessage(0);
 		return 0;
+
+	case WM_ENDSESSION:
+		Cleanup();
+		return 0;
+		break;
 
 	case WM_PAINT:
 		return 0;
@@ -174,7 +171,10 @@ extern "C" __declspec(dllexport) LRESULT UpdateLastInteractionMouse(int nCode, W
 	return CallNextHookEx(NULL, nCode, wParam, lParam);
 }
 
-
+extern "C" __declspec(dllexport) void EvaluateIdleConditions(HWND wnd, UINT message, UINT_PTR timerIdentifier, DWORD tickCount)
+{
+	OutputDebugString(L"Evaluate idle conditions\n");
+}
 
 void DebugShowTickCount(LPCWSTR context, DWORD hookCalls)
 {

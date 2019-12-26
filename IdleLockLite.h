@@ -25,6 +25,7 @@
 #pragma once
 
 BOOLEAN AlreadyRunning();
+void Cleanup();
 LRESULT CALLBACK WndProc(_In_ HWND hWnd,
     _In_ UINT message,
     _In_ WPARAM wParam,
@@ -32,3 +33,4 @@ LRESULT CALLBACK WndProc(_In_ HWND hWnd,
 void DebugShowTickCount(LPCWSTR context, DWORD hookCalls);
 extern "C" __declspec(dllexport) LRESULT UpdateLastInteractionKeyboard(int nCode, WPARAM wParam, LPARAM lParam);
 extern "C" __declspec(dllexport) LRESULT UpdateLastInteractionMouse(int nCode, WPARAM wParam, LPARAM lParam);
+extern "C" __declspec(dllexport) void EvaluateIdleConditions(HWND wnd, UINT message, UINT_PTR timerIdentifier, DWORD tickCount);
