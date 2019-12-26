@@ -42,6 +42,9 @@ ULONGLONG lastInteraction = 0;
 // last time we printed this
 ULONGLONG lastDebugOutputTickCount = 0;
 
+// starting value for tick duration calculator
+ULONGLONG tickCalculatorStart = 0;
+
 // number of times hook has been called
 ULONGLONG hookCalls = 0;
 
@@ -50,14 +53,20 @@ HHOOK llkeyboardHandle = 0;
 HHOOK llmouseHandle = 0;
 
 // timer
-UINT_PTR timer;
+UINT_PTR timer = 0;
+UINT_PTR calculateTicksTimer = 0;
 
-/* the rough number of ticks we consider to be an idle condition.
-The documentation suggests each tick is 10-16 ms. Let's assume it's 16ms.
-If the hooks haven't been called in this long, the system is idle and we
-should throw our dialogue.
+/* The rough number of ticks we consider to be an idle condition.
+Let's measure the ms per tick, roughly.
 */
-UINT roughTicksConsideredIdle;
+ULONGLONG roughTicksConsideredIdle = 0;
+ULONGLONG gracePeriod = 0;
+ULONGLONG msPerTick = 16;
+
+long int idleSeconds = 0;
+long int gracePeriodSeconds = 0;
+
+constexpr int timerFrequency = 10000;
 
 
 int APIENTRY WinMain(
@@ -93,8 +102,6 @@ int APIENTRY WinMain(
 		return ILL_EXITCODE_INVALIDARGC;
 	}
 
-	long int idleSeconds = 0;
-	long int gracePeriodSeconds = 0;
 
 	for (int i = 0; i < argCount; i++) {
 		switch (i) {
@@ -120,13 +127,15 @@ int APIENTRY WinMain(
 		}
 	}
 
+	LocalFree(argList); // tidy up as CommandLineToArgvW requires us to do
+
 	DEBUG_BUFFER;
 	if (swprintf_s(debugStrBuffer, bufLen, L"Started IdleLockLite with arguments %ld %ld\n", idleSeconds, gracePeriodSeconds)) {
 		OutputDebugString(debugStrBuffer);
 	}
 
-	LocalFree(argList); // tidy up as CommandLineToArgvW requires us to do
-
+	
+	// Set up our class
 
 	const wchar_t CLASS_NAME[] = L"IdleLockLite";
 	WNDCLASS wc = {};
@@ -139,14 +148,18 @@ int APIENTRY WinMain(
 	llmouseHandle = SetWindowsHookEx(WH_MOUSE_LL, (HOOKPROC)GetProcAddress(hInstance, "UpdateLastInteractionMouse"), hInstance, 0);
 
 
-	
 	if (swprintf_s(debugStrBuffer, bufLen, L"Began with tick count %lld\n", GetTickCount64()) > 0) {
 		OutputDebugString(debugStrBuffer);
 	}
 
-	// set a timer to evaluate if we should spawn the lock dialogue because of inactivity
-	timer = SetTimer(NULL, 0, 10000, EvaluateIdleConditions);
+	lastInteraction = GetTickCount64(); // seed this so we don't evaluate with 0
 
+	// set a timer to evaluate if we should spawn the lock dialogue because of inactivity -- this won't do anything until the tick duration is calculated
+	timer = SetTimer(NULL, 0, timerFrequency, EvaluateIdleConditions);
+
+	// calculate the tick duration and set the ticks considered idle
+	tickCalculatorStart = GetTickCount64();
+	calculateTicksTimer = SetTimer(NULL, 0, timerFrequency, CalculateTickDuration);
 
 	// main message loop
 	MSG msg;
@@ -237,7 +250,50 @@ extern "C" __declspec(dllexport) LRESULT UpdateLastInteractionMouse(int nCode, W
 
 extern "C" __declspec(dllexport) void EvaluateIdleConditions(HWND wnd, UINT message, UINT_PTR timerIdentifier, DWORD tickCount)
 {
-	OutputDebugString(L"Evaluate idle conditions\n");
+	DEBUG_BUFFER;
+
+	if (roughTicksConsideredIdle == 0) {
+		// not yet calculated -- bail
+		return;
+	}
+
+	ULONGLONG currentTicks = GetTickCount64();
+
+	if (swprintf_s(debugStrBuffer, bufLen, L"Evaluate idle: current %lld, lastinteraction %lld, roughTicksConsideredIdle %lld, target %lld\n", currentTicks, lastInteraction, roughTicksConsideredIdle, (lastInteraction + roughTicksConsideredIdle))) {
+		OutputDebugString(debugStrBuffer);
+	}
+
+	if (currentTicks > lastInteraction + roughTicksConsideredIdle) {
+		OutputDebugString(L"Idle detected\n");
+
+	}
+
+}
+
+extern "C" __declspec(dllexport) void CalculateTickDuration(HWND wnd, UINT message, UINT_PTR timerIdentifier, DWORD tickCount)
+{
+	DEBUG_BUFFER;
+
+	// we ran for timerFrequency ms -- so the number of milliseconds per tick is now - start divided by timerFrequency
+	ULONGLONG ticksNow = GetTickCount64();
+	msPerTick = (ticksNow - tickCalculatorStart) / timerFrequency;
+
+	if (swprintf_s(debugStrBuffer, bufLen, L"Calculate tick duration: now %lld, start %lld, frequency %d, result %lld\n", ticksNow, tickCalculatorStart, timerFrequency, msPerTick)) {
+		OutputDebugString(debugStrBuffer);
+	}
+
+	// what do those numbers mean in terms of ticks?
+	roughTicksConsideredIdle = (idleSeconds * (ULONGLONG)1000) / msPerTick;
+	gracePeriod = (gracePeriodSeconds * (ULONGLONG)1000) / msPerTick;
+
+	if (swprintf_s(debugStrBuffer, bufLen, L"Rough ticks considered idle: %lld\n", roughTicksConsideredIdle)) {
+		OutputDebugString(debugStrBuffer);
+	}
+	if (swprintf_s(debugStrBuffer, bufLen, L"Grace period: %lld\n", gracePeriod)) {
+		OutputDebugString(debugStrBuffer);
+	}
+
+	KillTimer(wnd, timerIdentifier); // unhook ourselves
 }
 
 void DebugShowTickCount(LPCWSTR context, DWORD hookCalls)
