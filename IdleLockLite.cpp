@@ -22,10 +22,12 @@
 #endif 
 
 #include "IdleLockLite.h"
+#include "resource.h"
 #include <Windows.h>
 #include <tchar.h>
 #include <assert.h>
 #include <TlHelp32.h>
+#include <CommCtrl.h>
 
 #define ILL_EXITCODE_MULTIPLEINSTANCES 1;
 #define ILL_EXITCODE_FAILEDTOPARSECMDLINE 2;
@@ -56,6 +58,9 @@ HHOOK llmouseHandle = 0;
 UINT_PTR timer = 0;
 UINT_PTR calculateTicksTimer = 0;
 
+// idle dialogue
+HWND idleDialogue = 0;
+
 /* The rough number of ticks we consider to be an idle condition.
 Let's measure the ms per tick, roughly.
 */
@@ -78,6 +83,7 @@ int APIENTRY WinMain(
 {
 	instance = hInstance;
 
+	//InitCommonControls();
 
 	if (AlreadyRunning())
 	{
@@ -161,13 +167,16 @@ int APIENTRY WinMain(
 	tickCalculatorStart = GetTickCount64();
 	calculateTicksTimer = SetTimer(NULL, 0, timerFrequency, CalculateTickDuration);
 
+
 	// main message loop
 	MSG msg;
 
 	while (GetMessage(&msg, nullptr, 0, 0))
 	{
-		TranslateMessage(&msg);
-		DispatchMessage(&msg);
+		if (!IsWindow(idleDialogue) || !IsDialogMessage(idleDialogue, &msg)) {
+			TranslateMessage(&msg);
+			DispatchMessage(&msg);
+		}
 	}
 
 	Cleanup();
@@ -193,6 +202,8 @@ LRESULT CALLBACK WndProc(
 	_In_ LPARAM lParam
 )
 {
+
+
 	switch (message)
 	{
 	case WM_DESTROY:
@@ -224,8 +235,9 @@ extern "C" __declspec(dllexport) LRESULT UpdateLastInteractionKeyboard(int nCode
 	lastInteraction = GetTickCount64();
 
 	DebugShowTickCount(L"Keyboard", hookCalls);
-
-	//TryKillShutdownProcess(lastInteraction);
+	if (nullptr != idleDialogue) { // performance we'll check for nullness inline
+		DestroyIdleDialogue();
+	}
 
 	return CallNextHookEx(NULL, nCode, wParam, lParam);
 }
@@ -243,7 +255,10 @@ extern "C" __declspec(dllexport) LRESULT UpdateLastInteractionMouse(int nCode, W
 
 	DebugShowTickCount(L"Mouse", hookCalls);
 	lastInteraction = GetTickCount64();
-	//TryKillShutdownProcess(lastInteraction);
+	if (nullptr != idleDialogue) { // performance we'll check for nullness inline
+		DestroyIdleDialogue();
+	}
+	
 
 	return CallNextHookEx(NULL, nCode, wParam, lParam);
 }
@@ -265,7 +280,11 @@ extern "C" __declspec(dllexport) void EvaluateIdleConditions(HWND wnd, UINT mess
 
 	if (currentTicks > lastInteraction + roughTicksConsideredIdle) {
 		OutputDebugString(L"Idle detected\n");
-
+		if (!IsWindow(idleDialogue)) {
+			idleDialogue = CreateDialog(instance, MAKEINTRESOURCE(IDLEDIALOGUE), nullptr, (DLGPROC)IdleDialogueProcedure);
+			ShowWindow(idleDialogue, SW_SHOW);
+		}
+		
 	}
 
 }
@@ -294,6 +313,13 @@ extern "C" __declspec(dllexport) void CalculateTickDuration(HWND wnd, UINT messa
 	}
 
 	KillTimer(wnd, timerIdentifier); // unhook ourselves
+}
+
+void DestroyIdleDialogue() {
+	if (IsWindow(idleDialogue)) {
+		DestroyWindow(idleDialogue);
+		idleDialogue = nullptr;
+	}
 }
 
 void DebugShowTickCount(LPCWSTR context, DWORD hookCalls)
@@ -344,5 +370,40 @@ BOOLEAN AlreadyRunning() {
 		}
 	} while (Process32Next(snapshot, &pe32));
 	CloseHandle(snapshot);
+	return FALSE;
+}
+
+BOOL CALLBACK IdleDialogueProcedure(HWND hwndDialogue, UINT message, WPARAM wParam, LPARAM lParam)
+{
+	BOOL fError;
+
+	switch (message)
+	{
+	case WM_INITDIALOG:
+		SendMessage(hwndDialogue, PBM_SETRANGE, 0, MAKELPARAM(0, gracePeriod));
+		SendMessage(hwndDialogue, PBM_SETSTEP, (WPARAM)1, 0);
+		return TRUE;
+
+	case WM_WINDOWPOSCHANGED:
+		SetWindowPos(hwndDialogue, HWND_TOPMOST, 0, 0, 0, 0, SWP_SHOWWINDOW | SWP_NOSIZE | SWP_NOMOVE);
+		break;
+
+	case WM_PAINT:
+		SendMessage(hwndDialogue, PBM_STEPIT, 0, 0);
+		break;
+
+	case WM_COMMAND:
+		switch (LOWORD(wParam))
+		{
+		case IDOK:
+			
+				return TRUE;
+
+		case IDCANCEL:
+			DestroyWindow(hwndDialogue);
+			idleDialogue = NULL;
+			return TRUE;
+		}
+	}
 	return FALSE;
 }

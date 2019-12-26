@@ -31,7 +31,9 @@ LRESULT CALLBACK WndProc(_In_ HWND hWnd,
     _In_ WPARAM wParam,
     _In_ LPARAM lParam);
 void DebugShowTickCount(LPCWSTR context, DWORD hookCalls);
+BOOL CALLBACK IdleDialogueProcedure(HWND hwndDialogue, UINT message, WPARAM wParam, LPARAM lParam);
 extern "C" __declspec(dllexport) LRESULT UpdateLastInteractionKeyboard(int nCode, WPARAM wParam, LPARAM lParam);
 extern "C" __declspec(dllexport) LRESULT UpdateLastInteractionMouse(int nCode, WPARAM wParam, LPARAM lParam);
 extern "C" __declspec(dllexport) void EvaluateIdleConditions(HWND wnd, UINT message, UINT_PTR timerIdentifier, DWORD tickCount);
 extern "C" __declspec(dllexport) void CalculateTickDuration(HWND wnd, UINT message, UINT_PTR timerIdentifier, DWORD tickCount);
+void DestroyIdleDialogue();
