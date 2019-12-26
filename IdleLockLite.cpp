@@ -27,6 +27,11 @@
 #include <assert.h>
 #include <TlHelp32.h>
 
+#define ILL_EXITCODE_MULTIPLEINSTANCES 1;
+#define ILL_EXITCODE_FAILEDTOPARSECMDLINE 2;
+#define ILL_EXITCODE_INVALIDARGC 3;
+#define ILL_EXITCODE_ARGVNAN 4;
+
 // globals
 
 HINSTANCE instance = 0;
@@ -47,6 +52,13 @@ HHOOK llmouseHandle = 0;
 // timer
 UINT_PTR timer;
 
+/* the rough number of ticks we consider to be an idle condition.
+The documentation suggests each tick is 10-16 ms. Let's assume it's 16ms.
+If the hooks haven't been called in this long, the system is idle and we
+should throw our dialogue.
+*/
+UINT roughTicksConsideredIdle;
+
 
 int APIENTRY WinMain(
 	_In_ HINSTANCE hInstance,
@@ -61,8 +73,60 @@ int APIENTRY WinMain(
 	if (AlreadyRunning())
 	{
 		OutputDebugString(L"Cannot run multiple instances");
-		return 1;
+		return ILL_EXITCODE_MULTIPLEINSTANCES;
 	}
+
+	// get command line args to determine what our idle time should be
+	LPWSTR* argList;
+	int argCount = 0;
+
+	argList = CommandLineToArgvW(GetCommandLine(), &argCount);
+	if (argList == nullptr) {
+		OutputDebugString(L"Failed to parse command line");
+		return ILL_EXITCODE_FAILEDTOPARSECMDLINE;
+	}
+
+	// expect two command line arguments (+1 for app name) -- length of time to consider idle, and the timeout on the dialogue before the lock occurs
+	if (argCount != 3) {
+		LocalFree(argList);
+		MessageBox(NULL, L"Please provide two arguments on the command line, or in the shortcut to this application.\n * length of time to consider idle (seconds)\n * timeout on the dialogue before the lock occurs (seconds)\n", L"Invalid command line arguments", MB_OK);
+		return ILL_EXITCODE_INVALIDARGC;
+	}
+
+	long int idleSeconds = 0;
+	long int gracePeriodSeconds = 0;
+
+	for (int i = 0; i < argCount; i++) {
+		switch (i) {
+		case 1:
+			// idle time
+			idleSeconds = wcstol(argList[i], nullptr, 10);
+			if (idleSeconds == 0) {
+				LocalFree(argList);
+				MessageBox(NULL, L"The length of time to consider idle (seconds) could not be understood as a number.", L"Invalid command line arguments", MB_OK);
+				return ILL_EXITCODE_ARGVNAN;
+			}
+			break;
+
+		case 2:
+			// dialogue box grace period
+			gracePeriodSeconds = wcstol(argList[i], nullptr, 10);
+			if (gracePeriodSeconds == 0) {
+				LocalFree(argList);
+				MessageBox(NULL, L"The timeout on the dialogue before the lock occurs (seconds) could not be understood as a number.", L"Invalid command line arguments", MB_OK);
+				return ILL_EXITCODE_ARGVNAN;
+			}
+			break;
+		}
+	}
+
+	DEBUG_BUFFER;
+	if (swprintf_s(debugStrBuffer, bufLen, L"Started IdleLockLite with arguments %ld %ld\n", idleSeconds, gracePeriodSeconds)) {
+		OutputDebugString(debugStrBuffer);
+	}
+
+	LocalFree(argList); // tidy up as CommandLineToArgvW requires us to do
+
 
 	const wchar_t CLASS_NAME[] = L"IdleLockLite";
 	WNDCLASS wc = {};
@@ -75,7 +139,7 @@ int APIENTRY WinMain(
 	llmouseHandle = SetWindowsHookEx(WH_MOUSE_LL, (HOOKPROC)GetProcAddress(hInstance, "UpdateLastInteractionMouse"), hInstance, 0);
 
 
-	DEBUG_BUFFER;
+	
 	if (swprintf_s(debugStrBuffer, bufLen, L"Began with tick count %lld\n", GetTickCount64()) > 0) {
 		OutputDebugString(debugStrBuffer);
 	}
