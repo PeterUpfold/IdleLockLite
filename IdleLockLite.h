@@ -19,8 +19,16 @@
 #include <Windows.h>
 #include <tchar.h>
 #include <assert.h>
+
+#define DEBUG_BUFFER const int bufLen = 512; wchar_t debugStrBuffer[bufLen];
+
 #pragma once
 
+BOOLEAN AlreadyRunning();
+LRESULT CALLBACK WndProc(_In_ HWND hWnd,
+    _In_ UINT message,
+    _In_ WPARAM wParam,
+    _In_ LPARAM lParam);
 void DebugShowTickCount(LPCWSTR context, DWORD hookCalls);
 extern "C" __declspec(dllexport) LRESULT UpdateLastInteractionKeyboard(int nCode, WPARAM wParam, LPARAM lParam);
 extern "C" __declspec(dllexport) LRESULT UpdateLastInteractionMouse(int nCode, WPARAM wParam, LPARAM lParam);
