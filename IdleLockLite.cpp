@@ -332,6 +332,7 @@ void DestroyIdleDialogue() {
 
 		DestroyWindow(idleDialogue);
 		idleDialogue = nullptr;
+		progressBar = nullptr; // needed to re-init this if it appears again
 	}
 }
 
