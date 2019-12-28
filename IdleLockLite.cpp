@@ -72,8 +72,10 @@ ULONGLONG roughTicksConsideredIdle = 0;
 ULONGLONG gracePeriod = 0;
 ULONGLONG msPerTick = 16;
 
+
 long int idleSeconds = 0;
 long int gracePeriodSeconds = 0;
+long int gracePeriodSecondsRemaining = 0;
 
 constexpr int timerFrequency = 10000;
 
@@ -128,6 +130,7 @@ int APIENTRY WinMain(
 		case 2:
 			// dialogue box grace period
 			gracePeriodSeconds = wcstol(argList[i], nullptr, 10);
+			gracePeriodSecondsRemaining = gracePeriodSeconds;
 			if (gracePeriodSeconds == 0) {
 				LocalFree(argList);
 				MessageBox(NULL, L"The timeout on the dialogue before the lock occurs (seconds) could not be understood as a number.", L"Invalid command line arguments", MB_OK);
@@ -194,10 +197,7 @@ void Cleanup()
 {
 	// clean up
 
-	if (nullptr != idleDialogue && NULL != stepProgressBarTimer) {
-		KillTimer(idleDialogue, stepProgressBarTimer);
-		stepProgressBarTimer = NULL;
-	}
+	CleanupProgressBarTimer(idleDialogue);
 
 	assert(llmouseHandle != NULL);
 	assert(llkeyboardHandle != NULL);
@@ -328,10 +328,7 @@ extern "C" __declspec(dllexport) void CalculateTickDuration(HWND wnd, UINT messa
 void DestroyIdleDialogue() {
 	if (IsWindow(idleDialogue)) {
 
-		if (NULL != stepProgressBarTimer) {
-			KillTimer(idleDialogue, stepProgressBarTimer);
-			stepProgressBarTimer = NULL;
-		}
+		CleanupProgressBarTimer(idleDialogue);
 
 		DestroyWindow(idleDialogue);
 		idleDialogue = nullptr;
@@ -406,7 +403,7 @@ BOOL CALLBACK IdleDialogueProcedure(HWND hwndDialogue, UINT message, WPARAM wPar
 
 	case WM_PAINT:
 
-		// init the progress bar if necessary
+		// init the progress bar if necessary -- is this the right place for this??
 		if (nullptr == progressBar) {
 			OutputDebugString(L"Init progress bar");
 			DEBUG_BUFFER;
@@ -423,8 +420,7 @@ BOOL CALLBACK IdleDialogueProcedure(HWND hwndDialogue, UINT message, WPARAM wPar
 
 			// set up the timer
 			if (NULL != stepProgressBarTimer) {
-				KillTimer(hwndDialogue, stepProgressBarTimer);
-				stepProgressBarTimer = NULL;
+				CleanupProgressBarTimer(hwndDialogue);
 			}
 			stepProgressBarTimer = SetTimer(hwndDialogue, 0, 1000, StepProgressBar);
 		}
@@ -439,16 +435,22 @@ BOOL CALLBACK IdleDialogueProcedure(HWND hwndDialogue, UINT message, WPARAM wPar
 				return TRUE;
 
 		case IDCANCEL:
-			if (NULL != stepProgressBarTimer) {
-				KillTimer(hwndDialogue, stepProgressBarTimer);
-				stepProgressBarTimer = NULL;
-			}
+			CleanupProgressBarTimer(hwndDialogue);
 			DestroyWindow(hwndDialogue);
 			idleDialogue = NULL;
 			return TRUE;
 		}
 	}
 	return FALSE;
+}
+
+void CleanupProgressBarTimer(const HWND& hwndDialogue)
+{
+	if (NULL != stepProgressBarTimer) {
+		KillTimer(hwndDialogue, stepProgressBarTimer);
+		stepProgressBarTimer = NULL;
+	}
+	gracePeriodSecondsRemaining = gracePeriodSeconds;
 }
 
 
@@ -458,4 +460,17 @@ void StepProgressBar(HWND wnd, UINT message, UINT_PTR timerIdentifier, DWORD tic
 	if (nullptr != progressBar) {
 		SendMessage(progressBar, PBM_STEPIT, 0, 0);
 	}
+
+	gracePeriodSecondsRemaining -= 1;
+
+	if (gracePeriodSecondsRemaining < 1) {
+		LockScreen();
+	}
+}
+
+void LockScreen() {
+	CleanupProgressBarTimer(idleDialogue);
+	DestroyIdleDialogue();
+
+	LockWorkStation();
 }
