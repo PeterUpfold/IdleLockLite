@@ -37,3 +37,4 @@ extern "C" __declspec(dllexport) LRESULT UpdateLastInteractionMouse(int nCode, W
 extern "C" __declspec(dllexport) void EvaluateIdleConditions(HWND wnd, UINT message, UINT_PTR timerIdentifier, DWORD tickCount);
 extern "C" __declspec(dllexport) void CalculateTickDuration(HWND wnd, UINT message, UINT_PTR timerIdentifier, DWORD tickCount);
 void DestroyIdleDialogue();
+void StepProgressBar(HWND wnd, UINT message, UINT_PTR timerIdentifier, DWORD tickCount);

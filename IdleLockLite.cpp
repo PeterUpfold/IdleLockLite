@@ -54,12 +54,16 @@ ULONGLONG hookCalls = 0;
 HHOOK llkeyboardHandle = 0;
 HHOOK llmouseHandle = 0;
 
-// timer
+// timers
 UINT_PTR timer = 0;
 UINT_PTR calculateTicksTimer = 0;
+UINT_PTR stepProgressBarTimer = 0;
 
 // idle dialogue
 HWND idleDialogue = 0;
+
+// progress bar
+HWND progressBar = 0;
 
 /* The rough number of ticks we consider to be an idle condition.
 Let's measure the ms per tick, roughly.
@@ -158,6 +162,7 @@ int APIENTRY WinMain(
 		OutputDebugString(debugStrBuffer);
 	}
 
+
 	lastInteraction = GetTickCount64(); // seed this so we don't evaluate with 0
 
 	// set a timer to evaluate if we should spawn the lock dialogue because of inactivity -- this won't do anything until the tick duration is calculated
@@ -188,6 +193,11 @@ int APIENTRY WinMain(
 void Cleanup()
 {
 	// clean up
+
+	if (nullptr != idleDialogue && NULL != stepProgressBarTimer) {
+		KillTimer(idleDialogue, stepProgressBarTimer);
+		stepProgressBarTimer = NULL;
+	}
 
 	assert(llmouseHandle != NULL);
 	assert(llkeyboardHandle != NULL);
@@ -317,6 +327,12 @@ extern "C" __declspec(dllexport) void CalculateTickDuration(HWND wnd, UINT messa
 
 void DestroyIdleDialogue() {
 	if (IsWindow(idleDialogue)) {
+
+		if (NULL != stepProgressBarTimer) {
+			KillTimer(idleDialogue, stepProgressBarTimer);
+			stepProgressBarTimer = NULL;
+		}
+
 		DestroyWindow(idleDialogue);
 		idleDialogue = nullptr;
 	}
@@ -377,11 +393,11 @@ BOOL CALLBACK IdleDialogueProcedure(HWND hwndDialogue, UINT message, WPARAM wPar
 {
 	BOOL fError;
 
+
 	switch (message)
 	{
 	case WM_INITDIALOG:
-		SendMessage(hwndDialogue, PBM_SETRANGE, 0, MAKELPARAM(0, gracePeriod));
-		SendMessage(hwndDialogue, PBM_SETSTEP, (WPARAM)1, 0);
+
 		return TRUE;
 
 	case WM_WINDOWPOSCHANGED:
@@ -389,7 +405,30 @@ BOOL CALLBACK IdleDialogueProcedure(HWND hwndDialogue, UINT message, WPARAM wPar
 		break;
 
 	case WM_PAINT:
-		SendMessage(hwndDialogue, PBM_STEPIT, 0, 0);
+
+		// init the progress bar if necessary
+		if (nullptr == progressBar) {
+			OutputDebugString(L"Init progress bar");
+			DEBUG_BUFFER;
+			progressBar = GetDlgItem(hwndDialogue, PROGRESSBAR);
+			if (swprintf_s(debugStrBuffer, bufLen, L"Error: %d\n", GetLastError()) > 0) {
+				OutputDebugString(debugStrBuffer);
+			}
+			SendMessage(progressBar, PBM_SETRANGE, 0, MAKELPARAM(0, gracePeriodSeconds));
+			SendMessage(progressBar, PBM_SETSTEP, (WPARAM)1, 0);
+
+			if (swprintf_s(debugStrBuffer, bufLen, L"Range: %d\n", gracePeriodSeconds) > 0) {
+				OutputDebugString(debugStrBuffer);
+			}
+
+			// set up the timer
+			if (NULL != stepProgressBarTimer) {
+				KillTimer(hwndDialogue, stepProgressBarTimer);
+				stepProgressBarTimer = NULL;
+			}
+			stepProgressBarTimer = SetTimer(hwndDialogue, 0, 1000, StepProgressBar);
+		}
+
 		break;
 
 	case WM_COMMAND:
@@ -400,10 +439,23 @@ BOOL CALLBACK IdleDialogueProcedure(HWND hwndDialogue, UINT message, WPARAM wPar
 				return TRUE;
 
 		case IDCANCEL:
+			if (NULL != stepProgressBarTimer) {
+				KillTimer(hwndDialogue, stepProgressBarTimer);
+				stepProgressBarTimer = NULL;
+			}
 			DestroyWindow(hwndDialogue);
 			idleDialogue = NULL;
 			return TRUE;
 		}
 	}
 	return FALSE;
+}
+
+
+void StepProgressBar(HWND wnd, UINT message, UINT_PTR timerIdentifier, DWORD tickCount)
+{
+	OutputDebugString(L"Step progress bar");
+	if (nullptr != progressBar) {
+		SendMessage(progressBar, PBM_STEPIT, 0, 0);
+	}
 }
