@@ -170,8 +170,8 @@ int APIENTRY WinMain(
 	// wait a little bit before actually hooking this -- RPC_S_INVALID_BINDING may be returned if Remote Desktop Services is not ready
 
 	// hook keyboard and mouse to determine non-idleness
-	llkeyboardHandle = SetWindowsHookEx(WH_KEYBOARD_LL, (HOOKPROC)GetProcAddress(hInstance, "UpdateLastInteractionKeyboard"), hInstance, 0);
-	llmouseHandle = SetWindowsHookEx(WH_MOUSE_LL, (HOOKPROC)GetProcAddress(hInstance, "UpdateLastInteractionMouse"), hInstance, 0);
+	//llkeyboardHandle = SetWindowsHookEx(WH_KEYBOARD_LL, (HOOKPROC)GetProcAddress(hInstance, "UpdateLastInteractionKeyboard"), hInstance, 0);
+	//llmouseHandle = SetWindowsHookEx(WH_MOUSE_LL, (HOOKPROC)GetProcAddress(hInstance, "UpdateLastInteractionMouse"), hInstance, 0);
 
 
 	if (swprintf_s(debugStrBuffer, bufLen, L"Began with tick count %lld\n", GetTickCount64()) > 0) {
@@ -195,11 +195,9 @@ int APIENTRY WinMain(
 	while (GetMessage(&msg, nullptr, 0, 0))
 	{
 		if (!IsWindow(idleDialogue) || !IsDialogMessage(idleDialogue, &msg)) {
-			TranslateMessage(&msg);
-			DispatchMessage(&msg);
-		}
-		else {
-			// dispatch to hidden window
+			/*if (msg.message == WM_TIMER) {
+				OutputDebugString(L"Handling WM_TIMER outside dialogue");
+			}*/
 			TranslateMessage(&msg);
 			DispatchMessage(&msg);
 		}
@@ -247,6 +245,12 @@ LRESULT CALLBACK WndProc(
 		return 0;
 		break;
 
+	case WM_TIMER:
+
+		OutputDebugString(L"IdleDialogueProcedure received WM_TIMER");
+		return 0;
+		break;
+
 	case WM_PAINT:
 		return 0;
 
@@ -257,11 +261,13 @@ LRESULT CALLBACK WndProc(
 		case WTS_SESSION_LOCK:
 			// if the user locked the workstation (or if we triggered this), stop idle detection
 			OutputDebugString(L"Session locked -- disabling detection\n");
+			DestroyIdleDialogue();
 			idleDetectionEnabled = false;
 			break;
 		case WTS_SESSION_UNLOCK:
 			// if the user just unlocked the workstation, re-enable the idle detection
 			OutputDebugString(L"Session unlocked -- enabling detection\n");
+			lastInteraction = GetTickCount64();
 			idleDetectionEnabled = true;
 			break;
 			
@@ -452,14 +458,6 @@ BOOL CALLBACK IdleDialogueProcedure(HWND hwndDialogue, UINT message, WPARAM wPar
 	{
 	case WM_INITDIALOG:
 
-		return TRUE;
-
-	case WM_WINDOWPOSCHANGED:
-		SetWindowPos(hwndDialogue, HWND_TOPMOST, 0, 0, 0, 0, SWP_SHOWWINDOW | SWP_NOSIZE | SWP_NOMOVE);
-		break;
-
-	case WM_PAINT:
-
 		// init the progress bar if necessary -- is this the right place for this??
 		if (nullptr == progressBar) {
 			OutputDebugString(L"Init progress bar\n");
@@ -477,11 +475,27 @@ BOOL CALLBACK IdleDialogueProcedure(HWND hwndDialogue, UINT message, WPARAM wPar
 
 			// set up the timer
 			if (NULL != stepProgressBarTimer) {
+				OutputDebugString(L"Tidying existing progress bar timer\n");
 				CleanupProgressBarTimer(hwndDialogue);
 			}
-			stepProgressBarTimer = SetTimer(hwndDialogue, 0, 1000, StepProgressBar);
+			stepProgressBarTimer = SetTimer(hwndDialogue, 1, 1000, StepProgressBar);
+			OutputDebugString(L"Set progress bar timer\n");
 		}
+		return TRUE;
 
+	case WM_WINDOWPOSCHANGED:
+		SetWindowPos(hwndDialogue, HWND_TOPMOST, 0, 0, 0, 0, SWP_SHOWWINDOW | SWP_NOSIZE | SWP_NOMOVE);
+		break;
+
+	case WM_PAINT:
+
+
+
+		break;
+
+	case WM_TIMER:
+		OutputDebugString(L"IdleDialogueProcedure received WM_TIMER");
+		return TRUE;
 		break;
 
 	case WM_COMMAND:
@@ -513,12 +527,22 @@ void CleanupProgressBarTimer(const HWND& hwndDialogue)
 
 void StepProgressBar(HWND wnd, UINT message, UINT_PTR timerIdentifier, DWORD tickCount)
 {
-	OutputDebugString(L"Step progress bar\n");
+	DEBUG_BUFFER;
+
+	if (swprintf_s(debugStrBuffer, bufLen, L"Step progress bar: %lld\n", GetTickCount64()) > 0) {
+		OutputDebugString(debugStrBuffer);
+	}
+
 	if (nullptr != progressBar) {
 		SendMessage(progressBar, PBM_STEPIT, 0, 0);
 	}
 
 	gracePeriodSecondsRemaining -= 1;
+
+	
+	if (swprintf_s(debugStrBuffer, bufLen, L"Grace period remaining: %ld\n", gracePeriodSecondsRemaining) > 0) {
+		OutputDebugString(debugStrBuffer);
+	}
 
 	if (gracePeriodSecondsRemaining < 1) {
 		LockScreen();
