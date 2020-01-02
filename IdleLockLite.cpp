@@ -28,6 +28,7 @@
 #include <assert.h>
 #include <TlHelp32.h>
 #include <CommCtrl.h>
+#include <WtsApi32.h>
 
 #define ILL_EXITCODE_MULTIPLEINSTANCES 1;
 #define ILL_EXITCODE_FAILEDTOPARSECMDLINE 2;
@@ -62,6 +63,9 @@ UINT_PTR stepProgressBarTimer = 0;
 // idle dialogue
 HWND idleDialogue = 0;
 
+// window to receive WM_WTSSESSION_CHANGE
+HWND hiddenWindow = 0;
+
 // progress bar
 HWND progressBar = 0;
 
@@ -71,6 +75,9 @@ Let's measure the ms per tick, roughly.
 ULONGLONG roughTicksConsideredIdle = 0;
 ULONGLONG gracePeriod = 0;
 ULONGLONG msPerTick = 16;
+
+
+BOOL idleDetectionEnabled = false;
 
 
 long int idleSeconds = 0;
@@ -93,7 +100,7 @@ int APIENTRY WinMain(
 
 	if (AlreadyRunning())
 	{
-		OutputDebugString(L"Cannot run multiple instances");
+		OutputDebugString(L"Cannot run multiple instances\n");
 		return ILL_EXITCODE_MULTIPLEINSTANCES;
 	}
 
@@ -103,7 +110,7 @@ int APIENTRY WinMain(
 
 	argList = CommandLineToArgvW(GetCommandLine(), &argCount);
 	if (argList == nullptr) {
-		OutputDebugString(L"Failed to parse command line");
+		OutputDebugString(L"Failed to parse command line\n");
 		return ILL_EXITCODE_FAILEDTOPARSECMDLINE;
 	}
 
@@ -157,6 +164,12 @@ int APIENTRY WinMain(
 	wc.lpszClassName = CLASS_NAME;
 	RegisterClass(&wc);
 
+	// hidden window to receive notifications of WTS_SESSION_UNLOCK
+	hiddenWindow = CreateWindowExW(0, CLASS_NAME, L"IdleLockLite hidden", WS_OVERLAPPED, 0, 0, 0, 0, nullptr, nullptr, instance, 0);
+
+	// wait a little bit before actually hooking this -- RPC_S_INVALID_BINDING may be returned if Remote Desktop Services is not ready
+
+	// hook keyboard and mouse to determine non-idleness
 	llkeyboardHandle = SetWindowsHookEx(WH_KEYBOARD_LL, (HOOKPROC)GetProcAddress(hInstance, "UpdateLastInteractionKeyboard"), hInstance, 0);
 	llmouseHandle = SetWindowsHookEx(WH_MOUSE_LL, (HOOKPROC)GetProcAddress(hInstance, "UpdateLastInteractionMouse"), hInstance, 0);
 
@@ -185,6 +198,11 @@ int APIENTRY WinMain(
 			TranslateMessage(&msg);
 			DispatchMessage(&msg);
 		}
+		else {
+			// dispatch to hidden window
+			TranslateMessage(&msg);
+			DispatchMessage(&msg);
+		}
 	}
 
 	Cleanup();
@@ -203,6 +221,9 @@ void Cleanup()
 	assert(llkeyboardHandle != NULL);
 	UnhookWindowsHookEx(llmouseHandle);
 	UnhookWindowsHookEx(llkeyboardHandle);
+
+	WTSUnRegisterSessionNotification(hiddenWindow);
+
 }
 
 LRESULT CALLBACK WndProc(
@@ -228,6 +249,26 @@ LRESULT CALLBACK WndProc(
 
 	case WM_PAINT:
 		return 0;
+
+	case WM_WTSSESSION_CHANGE:
+
+		// determine if we are interested in this
+		switch (wParam) {
+		case WTS_SESSION_LOCK:
+			// if the user locked the workstation (or if we triggered this), stop idle detection
+			OutputDebugString(L"Session locked -- disabling detection\n");
+			idleDetectionEnabled = false;
+			break;
+		case WTS_SESSION_UNLOCK:
+			// if the user just unlocked the workstation, re-enable the idle detection
+			OutputDebugString(L"Session unlocked -- enabling detection\n");
+			idleDetectionEnabled = true;
+			break;
+			
+		}
+
+		break;
+
 	}
 
 	return DefWindowProc(hWnd, message, wParam, lParam);
@@ -239,6 +280,10 @@ extern "C" __declspec(dllexport) LRESULT UpdateLastInteractionKeyboard(int nCode
 
 	// reduce frequency of calling GetTickCount
 	if ((hookCalls & 0xF) != 0) {
+		return CallNextHookEx(NULL, nCode, wParam, lParam);
+	}
+
+	if (!idleDetectionEnabled) {
 		return CallNextHookEx(NULL, nCode, wParam, lParam);
 	}
 
@@ -263,6 +308,10 @@ extern "C" __declspec(dllexport) LRESULT UpdateLastInteractionMouse(int nCode, W
 		return CallNextHookEx(NULL, nCode, wParam, lParam);
 	}
 
+	if (!idleDetectionEnabled) {
+		return CallNextHookEx(NULL, nCode, wParam, lParam);
+	}
+
 	DebugShowTickCount(L"Mouse", hookCalls);
 	lastInteraction = GetTickCount64();
 	if (nullptr != idleDialogue) { // performance we'll check for nullness inline
@@ -273,11 +322,11 @@ extern "C" __declspec(dllexport) LRESULT UpdateLastInteractionMouse(int nCode, W
 	return CallNextHookEx(NULL, nCode, wParam, lParam);
 }
 
-extern "C" __declspec(dllexport) void EvaluateIdleConditions(HWND wnd, UINT message, UINT_PTR timerIdentifier, DWORD tickCount)
+void EvaluateIdleConditions(HWND wnd, UINT message, UINT_PTR timerIdentifier, DWORD tickCount)
 {
 	DEBUG_BUFFER;
 
-	if (roughTicksConsideredIdle == 0) {
+	if (roughTicksConsideredIdle == 0 || !idleDetectionEnabled) {
 		// not yet calculated -- bail
 		return;
 	}
@@ -299,7 +348,7 @@ extern "C" __declspec(dllexport) void EvaluateIdleConditions(HWND wnd, UINT mess
 
 }
 
-extern "C" __declspec(dllexport) void CalculateTickDuration(HWND wnd, UINT message, UINT_PTR timerIdentifier, DWORD tickCount)
+void CalculateTickDuration(HWND wnd, UINT message, UINT_PTR timerIdentifier, DWORD tickCount)
 {
 	DEBUG_BUFFER;
 
@@ -323,6 +372,13 @@ extern "C" __declspec(dllexport) void CalculateTickDuration(HWND wnd, UINT messa
 	}
 
 	KillTimer(wnd, timerIdentifier); // unhook ourselves
+	idleDetectionEnabled = true;
+
+	if (nullptr != hiddenWindow) {
+		WTSRegisterSessionNotification(hiddenWindow, NOTIFY_FOR_THIS_SESSION);
+		OutputDebugString(L"Registering for session notifications\n");
+	}
+
 }
 
 void DestroyIdleDialogue() {
@@ -406,7 +462,7 @@ BOOL CALLBACK IdleDialogueProcedure(HWND hwndDialogue, UINT message, WPARAM wPar
 
 		// init the progress bar if necessary -- is this the right place for this??
 		if (nullptr == progressBar) {
-			OutputDebugString(L"Init progress bar");
+			OutputDebugString(L"Init progress bar\n");
 			DEBUG_BUFFER;
 			progressBar = GetDlgItem(hwndDialogue, PROGRESSBAR);
 			if (swprintf_s(debugStrBuffer, bufLen, L"Error: %d\n", GetLastError()) > 0) {
@@ -457,7 +513,7 @@ void CleanupProgressBarTimer(const HWND& hwndDialogue)
 
 void StepProgressBar(HWND wnd, UINT message, UINT_PTR timerIdentifier, DWORD tickCount)
 {
-	OutputDebugString(L"Step progress bar");
+	OutputDebugString(L"Step progress bar\n");
 	if (nullptr != progressBar) {
 		SendMessage(progressBar, PBM_STEPIT, 0, 0);
 	}
