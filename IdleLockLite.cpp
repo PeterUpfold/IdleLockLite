@@ -29,6 +29,7 @@
 #include <TlHelp32.h>
 #include <CommCtrl.h>
 #include <WtsApi32.h>
+#include <Shellapi.h>
 
 #define ILL_EXITCODE_MULTIPLEINSTANCES 1;
 #define ILL_EXITCODE_FAILEDTOPARSECMDLINE 2;
@@ -335,6 +336,18 @@ void EvaluateIdleConditions(HWND wnd, UINT message, UINT_PTR timerIdentifier, DW
 	if (roughTicksConsideredIdle == 0 || !idleDetectionEnabled) {
 		// not yet calculated -- bail
 		return;
+	}
+
+	// idle will not be detected if the user is in presentation mode etc.
+	QUERY_USER_NOTIFICATION_STATE notificationState = {};
+	if (S_OK == SHQueryUserNotificationState(&notificationState)) {
+		if (notificationState == QUNS_NOT_PRESENT ||
+			notificationState == QUNS_BUSY ||
+			notificationState == QUNS_RUNNING_D3D_FULL_SCREEN ||
+			notificationState == QUNS_QUIET_TIME) {
+			OutputDebugString(L"Will not detect idle while user notification state contra-indicates idle\n");
+			return;
+		}
 	}
 
 	ULONGLONG currentTicks = GetTickCount64();
